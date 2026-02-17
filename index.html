@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mic Level Meter</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+    }
+
+    .container {
+      text-align: center;
+      width: 500px;
+    }
+
+    h1 {
+      font-size: 1.5rem;
+      margin-bottom: 8px;
+      color: #fff;
+    }
+
+    .subtitle {
+      font-size: 0.85rem;
+      color: #888;
+      margin-bottom: 32px;
+    }
+
+    .lufs-display {
+      font-size: 3rem;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      margin-bottom: 24px;
+      color: #fff;
+    }
+
+    .lufs-display span {
+      font-size: 1rem;
+      color: #888;
+      font-weight: 400;
+    }
+
+    .meter-wrapper {
+      position: relative;
+      height: 32px;
+      background: #0d0d1a;
+      border-radius: 6px;
+      overflow: hidden;
+      margin-bottom: 8px;
+      border: 1px solid #333;
+    }
+
+    .meter-fill {
+      height: 100%;
+      width: 0%;
+      border-radius: 5px;
+      transition: width 0.45s ease-out, background 0.3s;
+      background: #4caf50;
+    }
+
+    .target-line {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background: #fff;
+      z-index: 2;
+    }
+
+    .target-label {
+      position: absolute;
+      top: -20px;
+      transform: translateX(-50%);
+      font-size: 0.7rem;
+      color: #ccc;
+      white-space: nowrap;
+    }
+
+    .scale {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.7rem;
+      color: #666;
+      margin-bottom: 24px;
+      padding: 0 2px;
+    }
+
+    .status {
+      font-size: 0.95rem;
+      margin-bottom: 24px;
+      min-height: 1.4em;
+    }
+
+    .status.good { color: #4caf50; }
+    .status.hot { color: #f44336; }
+    .status.low { color: #ff9800; }
+    .status.off { color: #666; }
+
+    button {
+      padding: 12px 32px;
+      font-size: 1rem;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      background: #4361ee;
+      color: #fff;
+      transition: background 0.2s;
+    }
+
+    button:hover { background: #3a56d4; }
+    button.active { background: #f44336; }
+    button.active:hover { background: #d32f2f; }
+
+    .device-select {
+      margin-bottom: 16px;
+    }
+
+    .device-select label {
+      font-size: 0.8rem;
+      color: #888;
+      display: block;
+      margin-bottom: 6px;
+    }
+
+    .device-select select {
+      width: 100%;
+      padding: 8px 12px;
+      font-size: 0.9rem;
+      background: #0d0d1a;
+      color: #e0e0e0;
+      border: 1px solid #333;
+      border-radius: 6px;
+      appearance: none;
+      -webkit-appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%23888'%3E%3Cpath d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 12px center;
+      cursor: pointer;
+    }
+
+    .device-select select:focus {
+      outline: none;
+      border-color: #4361ee;
+    }
+
+    .graph-section {
+      margin-top: 32px;
+    }
+
+    .graph-label {
+      font-size: 0.8rem;
+      color: #888;
+      margin-bottom: 8px;
+    }
+
+    .graph-wrapper {
+      position: relative;
+      background: #0d0d1a;
+      border: 1px solid #333;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 180px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Microphone Level Meter</h1>
+    <p class="subtitle">Target: &minus;24 LUFS</p>
+
+    <div class="lufs-display" id="lufsValue">-- <span>LUFS</span></div>
+
+    <div class="meter-wrapper">
+      <div class="meter-fill" id="meterFill"></div>
+      <div class="target-line" id="targetLine">
+        <div class="target-label">-24</div>
+      </div>
+    </div>
+    <div class="scale">
+      <span>&minus;60</span>
+      <span>&minus;48</span>
+      <span>&minus;36</span>
+      <span>&minus;24</span>
+      <span>&minus;12</span>
+      <span>0</span>
+    </div>
+
+    <div class="device-select">
+      <label for="deviceSelect">Audio Input Device</label>
+      <select id="deviceSelect">
+        <option value="">Default</option>
+      </select>
+    </div>
+
+    <div class="status off" id="status">Click Start to begin</div>
+
+    <button id="toggleBtn" onclick="toggle()">Start</button>
+
+    <div class="graph-section">
+      <div class="graph-label">History (last 30 seconds)</div>
+      <div class="graph-wrapper">
+        <canvas id="historyGraph"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const TARGET_LUFS = -24;
+    const METER_MIN = -60;
+    const METER_MAX = 0;
+    const WINDOW_SECONDS = 3;       // Measure over 3 seconds
+    const DISPLAY_INTERVAL = 500;   // Update display every 500ms
+    const SAMPLE_INTERVAL = 50;     // Collect samples every 50ms
+    const GRAPH_SECONDS = 30;       // Show last 30 seconds in graph
+
+    let audioCtx, analyser, source, stream;
+    let running = false;
+    let sampleTimer, displayTimer;
+    let rmsHistory = [];             // Sliding window of squared-RMS values with timestamps
+    let graphHistory = [];           // Array of { time, lufs } for graph
+
+    // Set up canvas
+    const canvas = document.getElementById('historyGraph');
+    const ctx = canvas.getContext('2d');
+
+    function sizeCanvas() {
+      const rect = canvas.parentElement.getBoundingClientRect();
+      canvas.width = rect.width * devicePixelRatio;
+      canvas.height = 180 * devicePixelRatio;
+      ctx.scale(devicePixelRatio, devicePixelRatio);
+      drawGraph();
+    }
+    window.addEventListener('resize', sizeCanvas);
+    sizeCanvas();
+
+    // Position the target line
+    const targetPct = ((TARGET_LUFS - METER_MIN) / (METER_MAX - METER_MIN)) * 100;
+    document.getElementById('targetLine').style.left = targetPct + '%';
+
+    // Populate audio input devices
+    const deviceSelect = document.getElementById('deviceSelect');
+
+    async function enumerateDevices() {
+      // Need a temporary permission grant to get device labels
+      try {
+        const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        tempStream.getTracks().forEach(t => t.stop());
+      } catch (e) {}
+
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const audioInputs = devices.filter(d => d.kind === 'audioinput');
+      const currentValue = deviceSelect.value;
+
+      // Keep the default option, clear the rest
+      deviceSelect.innerHTML = '<option value="">Default</option>';
+      audioInputs.forEach((device, i) => {
+        const opt = document.createElement('option');
+        opt.value = device.deviceId;
+        opt.textContent = device.label || `Microphone ${i + 1}`;
+        deviceSelect.appendChild(opt);
+      });
+
+      // Restore selection if still available
+      if (currentValue) deviceSelect.value = currentValue;
+    }
+
+    enumerateDevices();
+    navigator.mediaDevices.addEventListener('devicechange', enumerateDevices);
+
+    function drawGraph() {
+      const w = canvas.width / devicePixelRatio;
+      const h = canvas.height / devicePixelRatio;
+      const pad = { top: 12, bottom: 20, left: 36, right: 12 };
+      const plotW = w - pad.left - pad.right;
+      const plotH = h - pad.top - pad.bottom;
+
+      ctx.clearRect(0, 0, w, h);
+
+      // Y-axis: LUFS from METER_MIN to METER_MAX
+      const yForLufs = (lufs) => {
+        const ratio = (lufs - METER_MAX) / (METER_MIN - METER_MAX);
+        return pad.top + ratio * plotH;
+      };
+
+      // Grid lines and labels
+      ctx.strokeStyle = '#222';
+      ctx.lineWidth = 1;
+      ctx.fillStyle = '#555';
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'middle';
+      for (let db = 0; db >= METER_MIN; db -= 12) {
+        const y = yForLufs(db);
+        ctx.beginPath();
+        ctx.moveTo(pad.left, y);
+        ctx.lineTo(w - pad.right, y);
+        ctx.stroke();
+        ctx.fillText(db, pad.left - 4, y);
+      }
+
+      // Time labels along bottom
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      for (let s = 0; s <= GRAPH_SECONDS; s += 5) {
+        const x = pad.left + (1 - s / GRAPH_SECONDS) * plotW;
+        ctx.fillText(s === 0 ? 'now' : `-${s}s`, x, h - pad.bottom + 4);
+      }
+
+      // Target line at -24 LUFS
+      const targetY = yForLufs(TARGET_LUFS);
+      ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(pad.left, targetY);
+      ctx.lineTo(w - pad.right, targetY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Target label
+      ctx.fillStyle = 'rgba(255,255,255,0.5)';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText('Target -24', pad.left + 4, targetY - 2);
+
+      // Draw the LUFS history line
+      if (graphHistory.length < 2) return;
+
+      const now = graphHistory[graphHistory.length - 1].time;
+      const startTime = now - GRAPH_SECONDS * 1000;
+
+      ctx.beginPath();
+      let started = false;
+      for (let i = 0; i < graphHistory.length; i++) {
+        const pt = graphHistory[i];
+        if (pt.time < startTime) continue;
+        const x = pad.left + ((pt.time - startTime) / (GRAPH_SECONDS * 1000)) * plotW;
+        const y = yForLufs(Math.max(METER_MIN, Math.min(METER_MAX, pt.lufs)));
+        if (!started) {
+          ctx.moveTo(x, y);
+          started = true;
+        } else {
+          ctx.lineTo(x, y);
+        }
+      }
+      ctx.strokeStyle = '#4caf50';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      // Fill under the line with a gradient
+      if (started) {
+        const lastPt = graphHistory[graphHistory.length - 1];
+        const lastX = pad.left + ((lastPt.time - startTime) / (GRAPH_SECONDS * 1000)) * plotW;
+        ctx.lineTo(lastX, pad.top + plotH);
+        // Find the first visible point
+        let firstX = pad.left;
+        for (let i = 0; i < graphHistory.length; i++) {
+          if (graphHistory[i].time >= startTime) {
+            firstX = pad.left + ((graphHistory[i].time - startTime) / (GRAPH_SECONDS * 1000)) * plotW;
+            break;
+          }
+        }
+        ctx.lineTo(firstX, pad.top + plotH);
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(76, 175, 80, 0.1)';
+        ctx.fill();
+      }
+    }
+
+    function collectSample() {
+      const buf = new Float32Array(analyser.fftSize);
+      analyser.getFloatTimeDomainData(buf);
+
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) {
+        sum += buf[i] * buf[i];
+      }
+      const meanSquare = sum / buf.length;
+
+      const now = performance.now();
+      rmsHistory.push({ time: now, ms: meanSquare });
+
+      // Trim samples older than the window
+      const cutoff = now - WINDOW_SECONDS * 1000;
+      while (rmsHistory.length > 0 && rmsHistory[0].time < cutoff) {
+        rmsHistory.shift();
+      }
+    }
+
+    function updateDisplay() {
+      if (rmsHistory.length === 0) return;
+
+      // Average the mean-square values across the window
+      let total = 0;
+      for (let i = 0; i < rmsHistory.length; i++) {
+        total += rmsHistory[i].ms;
+      }
+      const avgMs = total / rmsHistory.length;
+      const rms = Math.sqrt(avgMs);
+      const lufs = 20 * Math.log10(Math.max(rms, 1e-10));
+
+      // Clamp for display
+      const clamped = Math.max(METER_MIN, Math.min(METER_MAX, lufs));
+      const pct = ((clamped - METER_MIN) / (METER_MAX - METER_MIN)) * 100;
+
+      const fill = document.getElementById('meterFill');
+      const display = document.getElementById('lufsValue');
+      const status = document.getElementById('status');
+
+      fill.style.width = pct + '%';
+
+      // Color the bar based on level
+      if (lufs > -20) {
+        fill.style.background = '#f44336';
+      } else if (lufs < -28) {
+        fill.style.background = '#ff9800';
+      } else {
+        fill.style.background = '#4caf50';
+      }
+
+      display.innerHTML = (lufs <= METER_MIN ? '--' : lufs.toFixed(1)) + ' <span>LUFS</span>';
+
+      // Record for graph
+      graphHistory.push({ time: performance.now(), lufs: lufs });
+      // Trim graph history beyond visible range
+      const graphCutoff = performance.now() - (GRAPH_SECONDS + 2) * 1000;
+      while (graphHistory.length > 0 && graphHistory[0].time < graphCutoff) {
+        graphHistory.shift();
+      }
+      drawGraph();
+
+      // Status message
+      const diff = lufs - TARGET_LUFS;
+      if (lufs <= METER_MIN) {
+        status.textContent = 'No signal detected';
+        status.className = 'status off';
+      } else if (diff > 12) {
+        status.textContent = 'Way too loud — move back or lower gain';
+        status.className = 'status hot';
+      } else if (diff > 4) {
+        status.textContent = 'Too loud — lower your gain a bit';
+        status.className = 'status hot';
+      } else if (diff < -12) {
+        status.textContent = 'Very quiet — speak up or raise gain';
+        status.className = 'status low';
+      } else if (diff < -4) {
+        status.textContent = 'A little quiet — try raising gain';
+        status.className = 'status low';
+      } else {
+        status.textContent = 'Good level!';
+        status.className = 'status good';
+      }
+    }
+
+    async function toggle() {
+      const btn = document.getElementById('toggleBtn');
+
+      if (running) {
+        clearInterval(sampleTimer);
+        clearInterval(displayTimer);
+        if (stream) stream.getTracks().forEach(t => t.stop());
+        if (audioCtx) audioCtx.close();
+        running = false;
+        rmsHistory = [];
+        graphHistory = [];
+        drawGraph();
+        btn.textContent = 'Start';
+        btn.classList.remove('active');
+        document.getElementById('meterFill').style.width = '0%';
+        document.getElementById('lufsValue').innerHTML = '-- <span>LUFS</span>';
+        document.getElementById('status').textContent = 'Click Start to begin';
+        document.getElementById('status').className = 'status off';
+        return;
+      }
+
+      try {
+        const deviceId = deviceSelect.value;
+        const constraints = deviceId
+          ? { audio: { deviceId: { exact: deviceId } } }
+          : { audio: true };
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+        audioCtx = new AudioContext();
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 4096;
+        source = audioCtx.createMediaStreamSource(stream);
+        source.connect(analyser);
+
+        rmsHistory = [];
+        running = true;
+        btn.textContent = 'Stop';
+        btn.classList.add('active');
+
+        // Collect samples frequently, update display less often
+        sampleTimer = setInterval(collectSample, SAMPLE_INTERVAL);
+        displayTimer = setInterval(updateDisplay, DISPLAY_INTERVAL);
+      } catch (err) {
+        document.getElementById('status').textContent = 'Mic access denied — check browser permissions';
+        document.getElementById('status').className = 'status hot';
+      }
+    }
+  </script>
+</body>
+</html>
