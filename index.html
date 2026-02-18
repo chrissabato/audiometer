@@ -20,6 +20,7 @@
     .container {
       text-align: center;
       width: 600px;
+      position: relative;
     }
 
     h1 {
@@ -93,16 +94,6 @@
       padding: 0 2px;
     }
 
-    .status {
-      font-size: 0.95rem;
-      margin-bottom: 24px;
-      min-height: 1.4em;
-    }
-
-    .status.good { color: #4caf50; }
-    .status.hot { color: #f44336; }
-    .status.low { color: #ff9800; }
-    .status.off { color: #666; }
 
     button {
       padding: 12px 32px;
@@ -119,6 +110,73 @@
     button.active { background: #f44336; }
     button.active:hover { background: #d32f2f; }
 
+    .settings-toggle {
+      position: absolute;
+      top: 0;
+      right: 0;
+      padding: 6px 12px;
+      font-size: 0.85rem;
+      background: transparent;
+      border: 1px solid #333;
+      color: #888;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: color 0.2s, border-color 0.2s;
+    }
+
+    .settings-toggle:hover {
+      color: #ccc;
+      border-color: #555;
+      background: transparent;
+    }
+
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.6);
+      z-index: 100;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .modal-overlay.open {
+      display: flex;
+    }
+
+    .modal {
+      background: #1a1a2e;
+      border: 1px solid #444;
+      border-radius: 10px;
+      padding: 28px 32px;
+      width: 380px;
+      position: relative;
+    }
+
+    .modal h2 {
+      font-size: 1.1rem;
+      color: #fff;
+      margin-bottom: 20px;
+    }
+
+    .modal-close {
+      position: absolute;
+      top: 12px;
+      right: 16px;
+      padding: 4px 8px;
+      font-size: 1.2rem;
+      background: transparent;
+      border: none;
+      color: #666;
+      cursor: pointer;
+      line-height: 1;
+    }
+
+    .modal-close:hover {
+      color: #fff;
+      background: transparent;
+    }
+
     .device-select {
       margin-bottom: 16px;
     }
@@ -128,13 +186,14 @@
       color: #888;
       display: block;
       margin-bottom: 6px;
+      text-align: left;
     }
 
     .device-select select {
       width: 100%;
       padding: 8px 12px;
       font-size: 0.9rem;
-      background: #0d0d1a;
+      background: #1a1a2e;
       color: #e0e0e0;
       border: 1px solid #333;
       border-radius: 6px;
@@ -198,16 +257,23 @@
       <span>0</span>
     </div>
 
-    <div class="device-select">
-      <label for="deviceSelect">Audio Input Device</label>
-      <select id="deviceSelect">
-        <option value="">Default</option>
-      </select>
+    <button class="settings-toggle" onclick="toggleSettings()">&#9881; Settings</button>
+
+    <div class="modal-overlay" id="settingsModal">
+      <div class="modal">
+        <button class="modal-close" onclick="toggleSettings()">&times;</button>
+        <h2>Settings</h2>
+
+        <div class="device-select">
+          <label for="deviceSelect">Audio Input Device</label>
+          <select id="deviceSelect">
+            <option value="">Default</option>
+          </select>
+        </div>
+
+        <button id="toggleBtn" onclick="toggle()">Start</button>
+      </div>
     </div>
-
-    <div class="status off" id="status">Click Start to begin</div>
-
-    <button id="toggleBtn" onclick="toggle()">Start</button>
 
     <div class="graph-section">
       <div class="graph-label">History (last 30 seconds)</div>
@@ -226,7 +292,7 @@
     const SAMPLE_INTERVAL = 50;     // Collect samples every 50ms
     const GRAPH_SECONDS = 30;       // Show last 30 seconds in graph
 
-    let audioCtx, analyser, source, stream;
+    let audioCtx, analyser, source, stream, kWeightStage1, kWeightStage2;
     let running = false;
     let sampleTimer, displayTimer;
     let rmsHistory = [];             // Sliding window of squared-RMS values with timestamps
@@ -279,6 +345,15 @@
 
     enumerateDevices();
     navigator.mediaDevices.addEventListener('devicechange', enumerateDevices);
+
+    function toggleSettings() {
+      document.getElementById('settingsModal').classList.toggle('open');
+    }
+
+    // Close modal when clicking the overlay background
+    document.getElementById('settingsModal').addEventListener('click', function(e) {
+      if (e.target === this) toggleSettings();
+    });
 
     function drawGraph() {
       const w = canvas.width / devicePixelRatio;
@@ -408,8 +483,8 @@
         total += rmsHistory[i].ms;
       }
       const avgMs = total / rmsHistory.length;
-      const rms = Math.sqrt(avgMs);
-      const lufs = 20 * Math.log10(Math.max(rms, 1e-10));
+      // LUFS = -0.691 + 10 * log10(mean square) per ITU-R BS.1770
+      const lufs = -0.691 + 10 * Math.log10(Math.max(avgMs, 1e-20));
 
       // Clamp for display
       const clamped = Math.max(METER_MIN, Math.min(METER_MAX, lufs));
@@ -417,7 +492,6 @@
 
       const fill = document.getElementById('meterFill');
       const display = document.getElementById('lufsValue');
-      const status = document.getElementById('status');
 
       fill.style.width = pct + '%';
 
@@ -441,27 +515,6 @@
       }
       drawGraph();
 
-      // Status message
-      const diff = lufs - TARGET_LUFS;
-      if (lufs <= METER_MIN) {
-        status.textContent = 'No signal detected';
-        status.className = 'status off';
-      } else if (diff > 12) {
-        status.textContent = 'Way too loud — move back or lower gain';
-        status.className = 'status hot';
-      } else if (diff > 4) {
-        status.textContent = 'Too loud — lower your gain a bit';
-        status.className = 'status hot';
-      } else if (diff < -12) {
-        status.textContent = 'Very quiet — speak up or raise gain';
-        status.className = 'status low';
-      } else if (diff < -4) {
-        status.textContent = 'A little quiet — try raising gain';
-        status.className = 'status low';
-      } else {
-        status.textContent = 'Good level!';
-        status.className = 'status good';
-      }
     }
 
     async function toggle() {
@@ -480,8 +533,6 @@
         btn.classList.remove('active');
         document.getElementById('meterFill').style.width = '0%';
         document.getElementById('lufsValue').innerHTML = '-- <span>LUFS</span>';
-        document.getElementById('status').textContent = 'Click Start to begin';
-        document.getElementById('status').className = 'status off';
         return;
       }
 
@@ -492,10 +543,26 @@
           : { audio: true };
         stream = await navigator.mediaDevices.getUserMedia(constraints);
         audioCtx = new AudioContext();
+
+        // K-weighting stage 1: high-shelf pre-filter (+4dB above ~1.5kHz)
+        kWeightStage1 = audioCtx.createBiquadFilter();
+        kWeightStage1.type = 'highshelf';
+        kWeightStage1.frequency.value = 1500;
+        kWeightStage1.gain.value = 4.0;
+
+        // K-weighting stage 2: high-pass RLB filter (~60Hz)
+        kWeightStage2 = audioCtx.createBiquadFilter();
+        kWeightStage2.type = 'highpass';
+        kWeightStage2.frequency.value = 60;
+        kWeightStage2.Q.value = 0.5;
+
         analyser = audioCtx.createAnalyser();
         analyser.fftSize = 4096;
+
         source = audioCtx.createMediaStreamSource(stream);
-        source.connect(analyser);
+        source.connect(kWeightStage1);
+        kWeightStage1.connect(kWeightStage2);
+        kWeightStage2.connect(analyser);
 
         rmsHistory = [];
         running = true;
@@ -506,8 +573,7 @@
         sampleTimer = setInterval(collectSample, SAMPLE_INTERVAL);
         displayTimer = setInterval(updateDisplay, DISPLAY_INTERVAL);
       } catch (err) {
-        document.getElementById('status').textContent = 'Mic access denied — check browser permissions';
-        document.getElementById('status').className = 'status hot';
+        console.error('Mic access denied', err);
       }
     }
   </script>
