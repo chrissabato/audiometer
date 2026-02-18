@@ -10,6 +10,7 @@
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       background: #1a1a2e;
+      transition: background-color 1s ease;
       color: #e0e0e0;
       display: flex;
       justify-content: center;
@@ -36,7 +37,7 @@
     }
 
     .lufs-display {
-      font-size: 5rem;
+      font-size: 7.5rem;
       font-weight: 700;
       font-variant-numeric: tabular-nums;
       margin-bottom: 28px;
@@ -495,13 +496,18 @@
 
       fill.style.width = pct + '%';
 
-      // Color the bar based on level
-      if (lufs > -20) {
+      // Color the bar and background based on level
+      if (lufs <= METER_MIN) {
+        document.body.style.backgroundColor = '#1a1a2e';
+      } else if (lufs > -20) {
         fill.style.background = '#f44336';
+        document.body.style.backgroundColor = '#2e1a1a';
       } else if (lufs < -28) {
         fill.style.background = '#ff9800';
+        document.body.style.backgroundColor = '#2e261a';
       } else {
         fill.style.background = '#4caf50';
+        document.body.style.backgroundColor = '#1a2e1e';
       }
 
       display.innerHTML = (lufs <= METER_MIN ? '--' : lufs.toFixed(1)) + ' <span>LUFS</span>';
@@ -533,6 +539,7 @@
         btn.classList.remove('active');
         document.getElementById('meterFill').style.width = '0%';
         document.getElementById('lufsValue').innerHTML = '-- <span>LUFS</span>';
+        document.body.style.backgroundColor = '#1a1a2e';
         return;
       }
 
