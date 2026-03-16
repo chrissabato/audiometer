@@ -445,7 +445,7 @@
       }
 
       document.getElementById('lufsValue').innerHTML =
-        (lufs <= METER_MIN ? '--' : lufs.toFixed(1)) + ' <span>LUFS</span>';
+        (lufs <= METER_MIN ? '--' : Math.round(lufs)) + ' <span>LUFS</span>';
 
       graphHistory.push({ time: performance.now(), lufs });
       const cut = performance.now() - (GRAPH_SECONDS + 2) * 1000;
