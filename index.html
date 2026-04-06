@@ -325,8 +325,8 @@
     const SAMPLE_INTERVAL  = 50;
     const GRAPH_SECONDS    = 30;
 
-    let audioCtx, analyser, source, stream, kWeightStage1, kWeightStage2;
-    let sampleTimer, displayTimer;
+    let audioCtx, source, stream, kWeightStage1, kWeightStage2, scriptNode;
+    let displayTimer;
     let rmsHistory  = [];
     let graphHistory = [];
 
@@ -430,18 +430,71 @@
 
     navigator.mediaDevices.addEventListener('devicechange', enumerateDevices);
 
-    // ── Audio ────────────────────────────────────────────────
-    function collectSample() {
-      const buf = new Float32Array(analyser.fftSize);
-      analyser.getFloatTimeDomainData(buf);
-      let sum = 0;
-      for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
-      const now = performance.now();
-      rmsHistory.push({ time: now, ms: sum / buf.length });
-      const cutoff = now - WINDOW_SECONDS * 1000;
-      while (rmsHistory.length && rmsHistory[0].time < cutoff) rmsHistory.shift();
+    // ── ITU-R BS.1770-4 filter coefficients ────────────────
+    // Attempt bilinear transform from the analog prototype.
+    // Reference sample rate is 48000 Hz; coefficients are adapted
+    // for the actual AudioContext sample rate using the bilinear
+    // transform pre-warp approach.
+
+    function bs1770Stage1Coeffs(fs) {
+      // Stage 1: Pre-filter (shelving boost ~+4dB above ~1.5kHz)
+      // Analog prototype poles/zeros from BS.1770-4 Table 1
+      // at 48 kHz: b = [1.53512485958697, -2.69169618940638, 1.19839281085285]
+      //            a = [1, -1.69065929318241, 0.73248077421585]
+      // We use the pre-warped bilinear transform to adapt these.
+      if (Math.abs(fs - 48000) < 1) {
+        return [
+          [1.53512485958697, -2.69169618940638, 1.19839281085285],
+          [1.0, -1.69065929318241, 0.73248077421585]
+        ];
+      }
+      // For other sample rates, compute via bilinear transform
+      // Pre-filter: analog transfer function parameters
+      const Vh  = 1.584893192;  // 10^(4/20) = linear gain of +4dB
+      const Vb  = Math.sqrt(Vh);
+      const fc  = 1681.974450955533;   // analog crossover freq (Hz)
+      const Q   = 0.7071752369554196;
+
+      const K  = Math.tan(Math.PI * fc / fs);
+      const K2 = K * K;
+      const denom = 1 + K / (Vb * Q) + K2;
+
+      const b0 = (Vh + Vb * K / Q + K2) / denom;
+      const b1 = 2 * (K2 - Vh) / denom;
+      const b2 = (Vh - Vb * K / Q + K2) / denom;
+      const a1 = 2 * (K2 - 1) / denom;
+      const a2 = (1 - K / (Vb * Q) + K2) / denom;
+
+      return [[b0, b1, b2], [1.0, a1, a2]];
     }
 
+    function bs1770Stage2Coeffs(fs) {
+      // Stage 2: RLB high-pass (~38Hz, Q≈0.5)
+      // at 48 kHz: b = [1.0, -2.0, 1.0]
+      //            a = [1, -1.99004745483398, 0.99007225036621]
+      if (Math.abs(fs - 48000) < 1) {
+        return [
+          [1.0, -2.0, 1.0],
+          [1.0, -1.99004745483398, 0.99007225036621]
+        ];
+      }
+      const fc = 38.13547087602444;  // analog corner freq (Hz)
+      const Q  = 0.5003270373238773;
+
+      const K  = Math.tan(Math.PI * fc / fs);
+      const K2 = K * K;
+      const denom = 1 + K / Q + K2;
+
+      const b0 = 1 / denom;
+      const b1 = -2 / denom;
+      const b2 = 1 / denom;
+      const a1 = 2 * (K2 - 1) / denom;
+      const a2 = (1 - K / Q + K2) / denom;
+
+      return [[b0, b1, b2], [1.0, a1, a2]];
+    }
+
+    // ── Audio ────────────────────────────────────────────────
     function updateDisplay() {
       if (!rmsHistory.length) return;
       let total = 0;
@@ -476,11 +529,11 @@
     }
 
     function stopAudio() {
-      clearInterval(sampleTimer);
       clearInterval(displayTimer);
+      if (scriptNode) { scriptNode.disconnect(); scriptNode.onaudioprocess = null; }
       if (stream)   stream.getTracks().forEach(t => t.stop());
       if (audioCtx) audioCtx.close();
-      stream = audioCtx = analyser = source = kWeightStage1 = kWeightStage2 = null;
+      stream = audioCtx = source = kWeightStage1 = kWeightStage2 = scriptNode = null;
       rmsHistory = [];
       document.getElementById('meterFill').style.width = '0%';
       document.getElementById('lufsValue').innerHTML = '-- <span>LUFS</span>';
@@ -514,27 +567,41 @@
 
       audioCtx = new AudioContext();
       if (audioCtx.state === 'suspended') await audioCtx.resume();
+      const fs = audioCtx.sampleRate;
 
-      kWeightStage1 = audioCtx.createBiquadFilter();
-      kWeightStage1.type = 'highshelf';
-      kWeightStage1.frequency.value = 1500;
-      kWeightStage1.gain.value = 4.0;
+      // ── ITU-R BS.1770-4 K-weighting filters ──
+      // Stage 1: Pre-filter (high-shelf-like boost)
+      // Coefficients from BS.1770-4 Table 1 (for 48 kHz),
+      // recomputed via bilinear transform for the actual sample rate.
+      kWeightStage1 = audioCtx.createIIRFilter(
+        ...bs1770Stage1Coeffs(fs)
+      );
 
-      kWeightStage2 = audioCtx.createBiquadFilter();
-      kWeightStage2.type = 'highpass';
-      kWeightStage2.frequency.value = 60;
-      kWeightStage2.Q.value = 0.5;
+      // Stage 2: RLB (Revised Low-frequency B-weighting) high-pass
+      kWeightStage2 = audioCtx.createIIRFilter(
+        ...bs1770Stage2Coeffs(fs)
+      );
 
-      analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 4096;
+      // Use ScriptProcessorNode to accumulate non-overlapping samples
+      const blockSize = 4096;
+      scriptNode = audioCtx.createScriptProcessor(blockSize, 1, 1);
+      scriptNode.onaudioprocess = function(e) {
+        const input = e.inputBuffer.getChannelData(0);
+        let sum = 0;
+        for (let i = 0; i < input.length; i++) sum += input[i] * input[i];
+        const now = performance.now();
+        rmsHistory.push({ time: now, ms: sum / input.length });
+        const cutoff = now - WINDOW_SECONDS * 1000;
+        while (rmsHistory.length && rmsHistory[0].time < cutoff) rmsHistory.shift();
+      };
 
       source = audioCtx.createMediaStreamSource(stream);
       source.connect(kWeightStage1);
       kWeightStage1.connect(kWeightStage2);
-      kWeightStage2.connect(analyser);
+      kWeightStage2.connect(scriptNode);
+      scriptNode.connect(audioCtx.destination); // required for scriptProcessor to fire
 
       rmsHistory = [];
-      sampleTimer  = setInterval(collectSample,    SAMPLE_INTERVAL);
       displayTimer = setInterval(updateDisplay, DISPLAY_INTERVAL);
     }
 
