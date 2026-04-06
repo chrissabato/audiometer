@@ -334,6 +334,9 @@
     let selectedDeviceLabel = 'Default Microphone';
     let audioDevices = [];
 
+    // Read ?input= param from URL
+    const urlParam = new URLSearchParams(location.search).get('input') || '';
+
     // ── Canvas ───────────────────────────────────────────────
     const canvas = document.getElementById('historyGraph');
     const ctx    = canvas.getContext('2d');
@@ -385,6 +388,8 @@
       });
     }
 
+    let urlParamResolved = false;
+
     async function enumerateDevices() {
       try {
         const devices = await navigator.mediaDevices.enumerateDevices();
@@ -392,6 +397,18 @@
           .filter(d => d.kind === 'audioinput')
           .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Microphone ${i + 1}` }));
         renderDeviceList();
+
+        // Resolve ?input= URL param once we have real device labels
+        if (urlParam && !urlParamResolved) {
+          urlParamResolved = true;
+          const q = urlParam.toLowerCase();
+          const match = audioDevices.find(d =>
+            d.label.toLowerCase().includes(q) || d.deviceId === urlParam
+          );
+          if (match && match.deviceId !== selectedDeviceId) {
+            await selectDevice(match.deviceId, match.label);
+          }
+        }
       } catch (e) {}
     }
 
@@ -401,6 +418,11 @@
       document.getElementById('deviceName').textContent = label;
       renderDeviceList();
       closeOverlay();
+      // Update URL so the selection can be bookmarked
+      const params = new URLSearchParams(location.search);
+      if (deviceId) params.set('input', label);
+      else          params.delete('input');
+      history.replaceState(null, '', location.pathname + (params.toString() ? '?' + params : ''));
       // Restart audio with new device
       await stopAudio();
       await startAudio();
