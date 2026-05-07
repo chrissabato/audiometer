@@ -542,16 +542,17 @@
 
     async function startAudio() {
       showError('');
+      const rawAudio = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
       try {
         const constraints = selectedDeviceId
-          ? { audio: { deviceId: { exact: selectedDeviceId } } }
-          : { audio: true };
+          ? { audio: { deviceId: { exact: selectedDeviceId }, ...rawAudio } }
+          : { audio: rawAudio };
         stream = await navigator.mediaDevices.getUserMedia(constraints);
       } catch (err) {
         // Fall back to default if specific device fails
         if (selectedDeviceId) {
           try {
-            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            stream = await navigator.mediaDevices.getUserMedia({ audio: rawAudio });
           } catch (e) {
             showError('Microphone access failed: ' + e.message);
             return;
